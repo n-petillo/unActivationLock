@@ -10,7 +10,7 @@ This script has been tested on macOS Monterey through macOS Sequoia (15.x) on bo
 
 ## What's New in V2.0
 
-- **Kandji Passport support** — handles account renames where the console username no longer matches the original local account (e.g. `carlybeaulieu` → `CBeaulieu@sportsfacilities.com`)
+- **Kandji Passport support** — handles account renames where the console username no longer matches the original local account (e.g. `jsmith` → `JSmith@company.com`)
 - **Updated instruction messaging** — step-by-step dialog messages tailored to macOS 14 and macOS 15, so users know exactly where to go in System Settings
 - **Reliable plist parsing** — rewrote Find My Mac detection to iterate services with PlistBuddy instead of fragile `grep`/`awk` parsing
 - **system_profiler as source of truth** — the `Enabled` field in `MobileMeAccounts.plist` is unreliable; Activation Lock status from `system_profiler` is now the authoritative signal

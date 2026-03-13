@@ -243,7 +243,7 @@ if [[ "$activationLock" == "Enabled" ]]; then
     if [[ -n "$FindMyUser" ]]; then
         # A local user has the Find My Mac service — prompt the current logged-in user.
         # We don't require an exact username match because Kandji Passport can rename
-        # accounts (e.g. "carlybeaulieu" → "CBeaulieu@sportsfacilities.com"), leaving
+        # accounts (e.g. "jsmith" → "JSmith@company.com"), leaving
         # the plist under the old username while the console user has the new one.
         if [[ "$FindMyUser" != "$currentUser" ]]; then
             LOGGING "Note: Find My account found under '$FindMyUser' ($FindMyEmail) but current user is '$currentUser' — likely a renamed/Passport account. Prompting current user."
