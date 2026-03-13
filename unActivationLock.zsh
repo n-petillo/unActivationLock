@@ -1,185 +1,274 @@
 #!/bin/zsh
 
-# UnActivationLock
-# An Activation Lock / iCloud Logout Prompt
-
-# This script checks to see if a machine is Activation locked by a user, and if so,
-# it will try to determine if the currently logged in user is the one associated with 
-# the activation lock, and prompt the user to turn off Find My Mac.
-
+# unActivationLock
+# Activation Lock / iCloud Find My Mac Removal Prompt
+#
+# Checks whether a Mac is Activation Locked by a user. If so, determines
+# whether the currently logged-in user is the one associated with the lock
+# and prompts them to disable Find My Mac.
+#
+# Originally authored by Brian Van Peski - macOS Adventures
+# Rewritten and maintained by Branch Digital — https://branch.digital
+#
 ########################################################################################
-# Created by Brian Van Peski - macOS Adventures
+# Version: 2.0 | See CHANGELOG for full version history.
+# Updated: 2026-03-09
 ########################################################################################
-# Current version: 1.6 | See CHANGELOG for full version history.
-# Updated: 12/21/2023
-
-# Set logging - Send logs to stdout as well as Unified Log
-# Use 'log show --process "logger"'to view logs activity.
-function LOGGING {
-    echo "${1}"
-    /usr/bin/logger "UnActivationLock: ${1}"
-}
 
 ##############################################################
-# USER INPUT 
+# USER INPUT
 ##############################################################
 # Messaging
 dialogTitle="Turn off Find My Mac"
-dialogMessage="This company device is currently locked to your iCloud account. Please turn off Find My Mac under iCloud > Show More Apps > Find My Mac."
-appIcon="/System/Library/PrivateFrameworks/AOSUI.framework/Versions/A/Resources/findmy.icns" #Path to app icon for messaging (optional)
-# SwiftDialog Options
+dialogMessage15="This company device is currently locked to your iCloud account. Please turn off Find My Mac:\n\n1. Open System Settings and click your name at the top of the sidebar.\n2. Click iCloud, then next to Saved to iCloud, click See All.\n3. Click Find My Mac, then click Turn Off."
+dialogMessage14="This company device is currently locked to your iCloud account. Please turn off Find My Mac:\n\n1. Open System Settings and click your name at the top of the sidebar.\n2. Click iCloud, then click Find My Mac.\n3. Click Turn Off next to Find My Mac."
+appIcon="/System/Library/PrivateFrameworks/AOSUI.framework/Versions/A/Resources/findmy.icns"
+
+# SwiftDialog options
 swiftDialogOptions=(
   --mini
   --ontop
   --moveable
 )
 
-attempts=6 #How many attempts at prompting the user before giving up.
-wait_time=40 #How many seconds to wait between user prompts.
+attempts=6      # Maximum number of prompts before giving up
+wait_time=40    # Seconds to wait between prompts
 
-# Change to 'true' if you want to *always* prompt the user to log out when Find My Mac
-# is enabled, regardless of user-based Activation Lock status.
+# Set to 'true' to always prompt when Find My Mac is enabled,
+# regardless of Activation Lock status.
 DisallowFindMy=false
 
 ##############################################################
-# VARIABLES & FUNCTIONS
+# VARIABLES
 ##############################################################
-currentUser=$(scutil <<< "show State:/Users/ConsoleUser" | awk '/Name :/ && ! /loginwindow/ { print $3 }' )
-uid=$(id -u "$currentUser")
-activationLock=$(/usr/sbin/system_profiler SPHardwareDataType | awk '/Activation Lock Status/{print $NF}')
+currentUser=$(scutil <<< "show State:/Users/ConsoleUser" | awk '/Name :/ && ! /loginwindow/ { print $3 }')
+uid=$(id -u "$currentUser" 2>/dev/null)
 plist="/Users/$currentUser/Library/Preferences/MobileMeAccounts.plist"
-DEPStatus=$(profiles status -type enrollment | grep "Enrolled via DEP" | awk '{print $4}')
-FindMyEnabled=$(/usr/libexec/PlistBuddy -c print "$plist" | grep -A1 "FIND_MY_MAC" | awk 'FNR == 2 {print $3}' ) #Checks dictionary to make sure proper user is targeted [if FindMy = then, continue]
 KandjiAgent="/Library/Kandji/Kandji Agent.app"
-#Path to SwiftDialog
 dialogPath="/usr/local/bin/dialog"
 dialogApp="/Library/Application Support/Dialog/Dialog.app"
 
-runAsUser() {
-  # From https://scriptingosx.com/2020/08/running-a-command-as-another-user
-  if [ "$currentUser" != "loginwindow" ]; then
-    launchctl asuser "$uid" sudo -u "$currentUser" "$@"
-  else
-    echo "No user logged in"
-    # Uncomment the exit command to make the function exit with an error when no user is logged in
-    # exit 1
-  fi
-}
+# macOS major version — used for System Settings URL compatibility
+osMajor=$(sw_vers -productVersion | cut -d. -f1)
 
-UserLookup (){
-## Fetch all local user accounts, return account with iCloud FindMyStatus enabled.
-USER_LIST=($(/usr/bin/dscl /Local/Default -list /Users UniqueID | /usr/bin/awk '$2 >= 500 {print $1}'|tr '\n' ' ' ))
-LOGGING "--- Checking Activation Lock status for the following users: $USER_LIST..."
-for user in "${USER_LIST[@]}"; do
-    plistLookup="/Users/${user}/Library/Preferences/MobileMeAccounts.plist"
-    #LOGGING "--- Checking Activation Lock status for $user..."
-    if [[ -f $plistLookup ]]; then
-      FindMyEnabled=$(/usr/libexec/PlistBuddy -c print "/Users/${user}/Library/Preferences/MobileMeAccounts.plist" | grep -A1 "FIND_MY_MAC" | awk 'FNR == 2 {print $3}' )
-      #LOGGING "Find My Status for $user is: $FindMyEnabled"
-      if [[ $FindMyEnabled == "true" ]]; then
-      LOGGING "Find My is enabled for user $user"
-      FindMyUser="$user"
-      FindMyEmail=$(/usr/libexec/PlistBuddy -c 'print Accounts:0:AccountID' "/Users/$user/Library/Preferences/MobileMeAccounts.plist")
-      fi
-    else
-      #LOGGING "No iCloud login found for $user"
-    fi
-done
-}
-
-UserDialog (){
-  #First check if the app icon exists
-  if [ -e "$appIcon" ]; then
-    iconCMD=(--icon "$appIcon")
-  else
-    #If the icon file doesn't exist, set an empty array to omit from dialogs.
-    iconCMD=()
-  fi
-
-  #If KandjiAgent is installed, use Kandji
-  if [[ -d "$KandjiAgent" ]]; then
-    /usr/local/bin/kandji display-alert --title "$dialogTitle" --message "$dialogMessage" ${iconCMD[@]}
-  #No Kandji, and SwiftDialog is installed, use SwiftDialog
-  elif [[ -e "$dialogPath" && -e "$dialogApp" ]]; then
-    "$dialogPath" --title "$dialogTitle" --message "$dialogMessage" ${swiftDialogOptions[@]} ${iconCMD[@]}
-  #No Kandji and no SwiftDialog, default to osascript w/ icon.
-  elif [ -e "$appIcon" ]; then
-    runAsUser /usr/bin/osascript -e 'display dialog "'"$dialogMessage"'" with title "'"$dialogTitle"'" with icon POSIX file "'"$appIcon"'" buttons {"Okay"} default button 1 giving up after 15'
-  #No Kandji, no SwiftDialog, and no appicon. Use osascript.
-  else
-    runAsUser /usr/bin/osascript -e 'display dialog "'"$dialogMessage"'" with title "'"$dialogTitle"'" buttons {"Okay"} default button 1 giving up after 15'
-  fi
-}
-
-##############################################################
-#  THE NEEDFUL
-##############################################################
-LOGGING "Activation Lock Status: $activationLock | ADE-Enrolled: $DEPStatus"
-#Check if Kandji Liftoff is running
-if pgrep "Liftoff" >/dev/null; then
-    LOGGING "--- Liftoff is running. Exiting to wait for apps to finish installing..."
-    exit 0
-# Check if Activation Lock is enabled.
-elif [[ $activationLock == "Enabled" ]]; then
-  LOGGING "--- User-Based Activation Lock is: Enabled. Checking local users..."
-  UserLookup
-  #Determine the FindMy enabled user and see if it matches the currently logged in user.
-  if [[ -f "$plist" && "$FindMyUser" == "$currentUser" ]]; then
-    dialogAttempts=0
-    until [[ $activationLock == "Disabled" ]]
-      do
-        if (( $dialogAttempts >= $attempts )); then
-          LOGGING "Prompts have been ignored after $attempts attempts. Giving up..."
-          exit 1
-        fi
-        LOGGING "--- Found logged in iCloud account '$FindMyUser'... Presenting pane to user and requesting user to log out..."
-        open "x-apple.systempreferences:com.apple.preferences.AppleIDPrefPane?iCloud"
-        runAsUser osascript -e 'tell application "System Settings"' -e 'activate' -e 'end tell'
-        UserDialog
-        sleep $wait_time
-        ((dialogAttempts++))
-        export activationLock=$(/usr/sbin/system_profiler SPHardwareDataType | awk '/Activation Lock Status/{print $NF}')
-      done
-    LOGGING "Activation Lock Status: $activationLock"
-    exit 0
-    elif [[ $activationLock == "Enabled" && -z $FindMyUser ]]; then
-      if /usr/sbin/nvram -xp | grep fmm-mobileme-token-FMM > /dev/null 2>&1; then
-        FindMyMac="Enabled"
-      else
-        FindMyMac="Disabled"
-      fi
-      LOGGING "--- Activation lock status is $activationLock, and there are no users with a FindMy token associated. FindMyMac is $FindMyMac on this computer. The cached activation lock status or FindMy status in the user's MobileMeAccounts.plist may be incorrect. Alerting admin for further troubleshooting..."
-      exit 1
-    else
-      LOGGING "--- The currently logged in user: '$currentUser' is not the user associated with the Activation Lock.
-      --- Activation Lock status is: $activationLock, and is locked by user '$FindMyUser' with account '$FindMyEmail'.
-      --- Script will continue to run until the appropriate user logs in and is prompted to turn off Find My.
-      Exiting..."
-      exit 1
-  fi
+# Select dialog message based on macOS version
+if (( osMajor >= 15 )); then
+    dialogMessage="$dialogMessage15"
 else
-  UserLookup
-  # Always prompt if Find My Mac is enabled (optional)
-  if [[ $DisallowFindMy == true && "$FindMyUser" == "$currentUser" ]]; then
-    dialogAttempts=0
-    until [[ $FindMyEnabled == false ]]
-      do
-        if (( $dialogAttempts >= $attempts )); then
-        LOGGING "Prompts have been ignored after $attempts attempts. Giving up..."
-        exit 1
+    dialogMessage="$dialogMessage14"
+fi
+
+# Populated by UserLookup
+FindMyUser=""
+FindMyEmail=""
+FindMyEnabled=""
+
+##############################################################
+# FUNCTIONS
+##############################################################
+
+LOGGING() {
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[${timestamp}] UnActivationLock: ${1}"
+    /usr/bin/logger -t "UnActivationLock" "${1}"
+}
+
+runAsUser() {
+    if [[ -n "$currentUser" && "$currentUser" != "loginwindow" ]]; then
+        launchctl asuser "$uid" sudo -u "$currentUser" "$@"
+    else
+        LOGGING "No user logged in — skipping user-context command."
+    fi
+}
+
+getActivationLockStatus() {
+    /usr/sbin/system_profiler SPHardwareDataType 2>/dev/null | awk '/Activation Lock Status/{print $NF}'
+}
+
+openSystemSettings() {
+    # macOS 13 (Ventura) and later renamed System Preferences to System Settings
+    # and updated the URL scheme for iCloud preferences.
+    if (( osMajor >= 13 )); then
+        runAsUser open "x-apple.systempreferences:com.apple.preferences.AppleIDPrefPane" 2>/dev/null
+        runAsUser osascript -e 'tell application "System Settings" to activate' 2>/dev/null
+    else
+        runAsUser open "x-apple.systempreferences:com.apple.preferences.AppleIDPrefPane?iCloud" 2>/dev/null
+        runAsUser osascript -e 'tell application "System Preferences" to activate' 2>/dev/null
+    fi
+}
+
+UserLookup() {
+    ## Fetch all local user accounts and find any with a Find My Mac service entry.
+    ## NOTE: The plist Enabled field is NOT reliable — macOS does not always keep it
+    ## in sync with the actual Find My Mac state. We use system_profiler's Activation
+    ## Lock status as the source of truth and only use the plist to identify WHICH
+    ## user has iCloud + Find My Mac configured.
+    local USER_LIST
+    USER_LIST=($(/usr/bin/dscl /Local/Default -list /Users UniqueID | /usr/bin/awk '$2 >= 500 {print $1}'))
+    LOGGING "Checking Find My Mac status for users: ${USER_LIST[*]}"
+
+    for user in "${USER_LIST[@]}"; do
+        local userPlist="/Users/${user}/Library/Preferences/MobileMeAccounts.plist"
+        [[ -f "$userPlist" ]] || continue
+
+        # Check if this user has a FIND_MY_MAC service entry at all
+        # Match on Name field (= "FIND_MY_MAC"), not ServiceID (= "com.apple.Dataclass.DeviceLocator")
+        local servicesOutput serviceCount i serviceName hasFindMy
+        servicesOutput=$(/usr/libexec/PlistBuddy -c 'print :Accounts:0:Services' "$userPlist" 2>/dev/null)
+        [[ -n "$servicesOutput" ]] || continue
+
+        serviceCount=$(echo "$servicesOutput" | grep -c "Dict {")
+        serviceCount=${serviceCount:-0}
+
+        hasFindMy="false"
+        for (( i=0; i<serviceCount; i++ )); do
+            serviceName=$(/usr/libexec/PlistBuddy -c "print :Accounts:0:Services:${i}:Name" "$userPlist" 2>/dev/null)
+            if [[ "$serviceName" == "FIND_MY_MAC" ]]; then
+                hasFindMy="true"
+                break
+            fi
+        done
+
+        if [[ "$hasFindMy" == "true" ]]; then
+            LOGGING "User $user has Find My Mac service in iCloud account."
+            FindMyUser="$user"
+            FindMyEnabled="true"
+            FindMyEmail=$(/usr/libexec/PlistBuddy -c 'print :Accounts:0:AccountID' "$userPlist" 2>/dev/null || echo "Unknown")
+            break  # Stop at first user with Find My Mac service entry
         fi
-        LOGGING "--- Found logged in iCloud account for user '$FindMyUser' with account '$FindMyEmail'... Presenting pane to user and requesting user to log out of Find My Mac."
-        runAsUser open "x-apple.systempreferences:com.apple.preferences.AppleIDPrefPane?iCloud"
-        runAsUser osascript -e 'tell application "System Settings"' -e 'activate' -e 'end tell'
+    done
+}
+
+UserDialog() {
+    local iconCMD=()
+    if [[ -f "$appIcon" ]]; then
+        iconCMD=(--icon "$appIcon")
+    fi
+
+    if [[ -d "$KandjiAgent" ]]; then
+        /usr/local/bin/kandji display-alert --title "$dialogTitle" --message "$dialogMessage" "${iconCMD[@]}"
+    elif [[ -x "$dialogPath" && -d "$dialogApp" ]]; then
+        "$dialogPath" --title "$dialogTitle" --message "$dialogMessage" "${swiftDialogOptions[@]}" "${iconCMD[@]}"
+    elif [[ -f "$appIcon" ]]; then
+        runAsUser /usr/bin/osascript -e "display dialog \"$dialogMessage\" with title \"$dialogTitle\" with icon POSIX file \"$appIcon\" buttons {\"OK\"} default button 1 giving up after 15"
+    else
+        runAsUser /usr/bin/osascript -e "display dialog \"$dialogMessage\" with title \"$dialogTitle\" buttons {\"OK\"} default button 1 giving up after 15"
+    fi
+}
+
+promptActivationLockLoop() {
+    local dialogAttempts=0
+    activationLock=$(getActivationLockStatus)
+
+    until [[ "$activationLock" == "Disabled" ]]; do
+        if (( dialogAttempts >= attempts )); then
+            LOGGING "User ignored $attempts prompts. Giving up."
+            exit 1
+        fi
+        LOGGING "Prompting '$currentUser' to disable Find My Mac (attempt $((dialogAttempts + 1)) of $attempts)..."
+        openSystemSettings
         UserDialog
-        sleep $wait_time
-        ((dialogAttempts++))
-        #export FindMyStatus
-        export FindMyEnabled=$(/usr/libexec/PlistBuddy -c print "$plist" | grep -A1 "FIND_MY_MAC" | awk 'FNR == 2 {print $3}')
-      done
-  fi
-  LOGGING "--- User-based Activation Lock not enabled.
-  --- Find My Mac status for $currentUser is: $FindMyEnabled.
-  Exiting..."
-  exit 0
+        sleep "$wait_time"
+        (( dialogAttempts++ ))
+        activationLock=$(getActivationLockStatus)
+    done
+}
+
+getFindMyStatus() {
+    local targetPlist="$1"
+    local servicesOutput serviceCount i serviceName result
+    servicesOutput=$(/usr/libexec/PlistBuddy -c 'print :Accounts:0:Services' "$targetPlist" 2>/dev/null)
+    serviceCount=$(echo "$servicesOutput" | grep -c "Dict {")
+    serviceCount=${serviceCount:-0}
+    result="false"
+    for (( i=0; i<serviceCount; i++ )); do
+        serviceName=$(/usr/libexec/PlistBuddy -c "print :Accounts:0:Services:${i}:Name" "$targetPlist" 2>/dev/null)
+        if [[ "$serviceName" == "FIND_MY_MAC" ]]; then
+            result=$(/usr/libexec/PlistBuddy -c "print :Accounts:0:Services:${i}:Enabled" "$targetPlist" 2>/dev/null)
+            break
+        fi
+    done
+    echo "$result"
+}
+
+promptFindMyLoop() {
+    local dialogAttempts=0
+    FindMyEnabled=$(getFindMyStatus "$plist")
+
+    until [[ "$FindMyEnabled" == "false" ]]; do
+        if (( dialogAttempts >= attempts )); then
+            LOGGING "User ignored $attempts prompts. Giving up."
+            exit 1
+        fi
+        LOGGING "Prompting '$currentUser' to disable Find My Mac (attempt $((dialogAttempts + 1)) of $attempts)..."
+        openSystemSettings
+        UserDialog
+        sleep "$wait_time"
+        (( dialogAttempts++ ))
+        FindMyEnabled=$(getFindMyStatus "$plist")
+    done
+}
+
+##############################################################
+# PREFLIGHT CHECKS
+##############################################################
+
+# Ensure a user is logged in before proceeding
+if [[ -z "$currentUser" || "$currentUser" == "loginwindow" ]]; then
+    LOGGING "No user is currently logged in. Exiting."
+    exit 0
+fi
+
+# Check if Kandji Liftoff is running (device setup in progress — wait for it to finish)
+if pgrep -x "Liftoff" >/dev/null 2>&1; then
+    LOGGING "Liftoff is running — waiting for app installs to complete. Exiting."
+    exit 0
+fi
+
+##############################################################
+# MAIN
+##############################################################
+
+activationLock=$(getActivationLockStatus)
+DEPStatus=$(profiles status -type enrollment 2>/dev/null | awk '/Enrolled via DEP/{print $NF}')
+LOGGING "Activation Lock: $activationLock | DEP Enrolled: $DEPStatus | User: $currentUser | macOS: $(sw_vers -productVersion)"
+
+# Perform user lookup once — results stored in FindMyUser, FindMyEmail, FindMyEnabled
+UserLookup
+
+if [[ "$activationLock" == "Enabled" ]]; then
+    LOGGING "User-Based Activation Lock is enabled. Checking for a matching local user..."
+
+    if [[ -n "$FindMyUser" ]]; then
+        # A local user has the Find My Mac service — prompt the current logged-in user.
+        # We don't require an exact username match because Kandji Passport can rename
+        # accounts (e.g. "carlybeaulieu" → "CBeaulieu@sportsfacilities.com"), leaving
+        # the plist under the old username while the console user has the new one.
+        if [[ "$FindMyUser" != "$currentUser" ]]; then
+            LOGGING "Note: Find My account found under '$FindMyUser' ($FindMyEmail) but current user is '$currentUser' — likely a renamed/Passport account. Prompting current user."
+        fi
+        promptActivationLockLoop
+        LOGGING "Activation Lock is now: $(getActivationLockStatus). Exiting."
+        exit 0
+
+    else
+        # Activation Lock is on but no local user has a Find My token — check NVRAM
+        nvramToken="absent"
+        if /usr/sbin/nvram -xp 2>/dev/null | grep -q "fmm-mobileme-token-FMM"; then
+            nvramToken="present"
+        fi
+        LOGGING "Activation Lock is enabled but no local Find My user found. NVRAM token: $nvramToken. Manual investigation required."
+        exit 1
+    fi
+
+else
+    # Activation Lock is not enabled
+    if [[ "$DisallowFindMy" == "true" && "$FindMyUser" == "$currentUser" ]]; then
+        LOGGING "DisallowFindMy is enabled. Prompting '$currentUser' ($FindMyEmail) to disable Find My Mac."
+        promptFindMyLoop
+    fi
+
+    LOGGING "Activation Lock not enabled. Find My Mac status for '$currentUser': ${FindMyEnabled:-false}. Exiting."
+    exit 0
 fi
